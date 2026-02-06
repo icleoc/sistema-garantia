@@ -18,7 +18,6 @@ def verificar_login():
     if st.session_state.user_data is None:
         st.markdown("<h2 style='text-align: center;'>🔒 Acesso ao Sistema</h2>", unsafe_allow_html=True)
         
-        # O formulário permite que o 'Enter' faça o envio automático
         with st.form("login_form", clear_on_submit=False):
             u = st.text_input("Usuário ou Email")
             s = st.text_input("Senha", type="password")
@@ -79,15 +78,16 @@ if verificar_login():
                 supabase.table("registros_garantia").insert({"codigo": codigo, "validade": nova_val}).execute()
                 st.info(f"💾 CADASTRADO: {codigo} (1 ano de garantia)")
 
-    # --- ABA: ADMIN (GESTÃO COMPLETA) ---
+    # --- ABA: ADMIN (GESTÃO DE CLIENTES) ---
     elif aba == "Gerenciar Usuários":
         st.title("👥 Gestão de Clientes")
-        tab1, tab2, tab3 = st.tabs(["Listar/Excluir", "Novo Usuário", "Alterar Senha/Email"])
+        tab1, tab2, tab3 = st.tabs(["Listar/Excluir", "Novo Usuário", "Renovar / Editar"])
 
         with tab1:
             res_u = supabase.table("usuarios_sistema").select("login, email, vencimento_assinatura").eq("role", "cliente").execute()
             if res_u.data:
                 df = pd.DataFrame(res_u.data)
+                df.columns = ['Login', 'E-mail', 'Vencimento']
                 st.dataframe(df, use_container_width=True)
                 st.divider()
                 u_del = st.selectbox("Selecione para EXCLUIR", [u['login'] for u in res_u.data])
@@ -99,21 +99,40 @@ if verificar_login():
         with tab2:
             with st.form("novo_user_form"):
                 nl, ne, ns = st.text_input("Login"), st.text_input("Email"), st.text_input("Senha")
-                nv = st.date_input("Vencimento Assinatura", value=hoje + timedelta(days=30))
+                nv = st.date_input("Vencimento Inicial", value=hoje + timedelta(days=30))
                 if st.form_submit_button("Cadastrar Cliente"):
-                    supabase.table("usuarios_sistema").insert({"login": nl, "email": ne, "senha": ns, "vencimento_assinatura": nv.isoformat()}).execute()
+                    supabase.table("usuarios_sistema").insert({
+                        "login": nl, "email": ne, "senha": ns, 
+                        "vencimento_assinatura": nv.isoformat(),
+                        "role": "cliente"
+                    }).execute()
                     st.success("Cliente cadastrado!")
 
         with tab3:
-            res_e = supabase.table("usuarios_sistema").select("login").eq("role", "cliente").execute()
-            u_edit = st.selectbox("Selecione para Editar", [u['login'] for u in res_e.data])
-            with st.form("edit_form"):
-                new_e = st.text_input("Novo Email")
-                new_s = st.text_input("Nova Senha")
-                if st.form_submit_button("Atualizar Dados"):
-                    upd = {}
-                    if new_e: upd["email"] = new_e
-                    if new_s: upd["senha"] = new_s
-                    if upd:
+            res_e = supabase.table("usuarios_sistema").select("login, email, vencimento_assinatura").eq("role", "cliente").execute()
+            if res_e.data:
+                # Criar dicionário para carregar dados atuais ao selecionar
+                dict_users = {u['login']: u for u in res_e.data}
+                u_edit = st.selectbox("Selecione o Cliente para Alterar", list(dict_users.keys()))
+                
+                user_atual = dict_users[u_edit]
+                data_atual_venc = datetime.strptime(user_atual['vencimento_assinatura'], '%Y-%m-%d').date()
+
+                with st.form("edit_form_avancado"):
+                    st.info(f"Editando: {u_edit}")
+                    new_e = st.text_input("Novo Email", value=user_atual['email'])
+                    new_s = st.text_input("Nova Senha (deixe em branco para manter)")
+                    # CAMPO SOLICITADO: Alteração de data de vencimento
+                    new_v = st.date_input("Nova Data de Vencimento", value=data_atual_venc)
+                    
+                    if st.form_submit_button("Salvar Alterações / Renovar"):
+                        upd = {
+                            "email": new_e,
+                            "vencimento_assinatura": new_v.isoformat()
+                        }
+                        if new_s: 
+                            upd["senha"] = new_s
+                            
                         supabase.table("usuarios_sistema").update(upd).eq("login", u_edit).execute()
-                        st.success("Dados atualizados com sucesso!")
+                        st.success(f"Dados de {u_edit} atualizados com sucesso!")
+                        st.rerun()
