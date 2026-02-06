@@ -25,8 +25,8 @@ def verificar_login():
                     if res.data:
                         st.session_state.user_data = res.data[0]
                         st.rerun()
-                    else: st.error("Incorreto.")
-                except: st.error("Erro de conexão com Supabase.")
+                    else: st.error("Credenciais incorretas.")
+                except: st.error("Erro de conexão com o banco de dados.")
         return False
     return True
 
@@ -35,21 +35,21 @@ if verificar_login():
     venc_assinatura = datetime.strptime(user['vencimento_assinatura'], '%Y-%m-%d').date()
     hoje = date.today()
     
-    # --- ALERTA E BLOQUEIO COM WHATSAPP ---
-    dias_restantes = (venc_assinatura - hoje).days
+    # --- ALERTA E BLOQUEIO ---
     whatsapp_link = "https://wa.me/5562991772700?text=Preciso%20renovar%20minha%20licença"
+    dias_restantes = (venc_assinatura - hoje).days
 
     if 0 <= dias_restantes <= 5:
-        st.warning(f"⚠️ Licença vence em {dias_restantes} dias. [Falar com Suporte]({whatsapp_link})")
+        st.warning(f"⚠️ Sua licença vence em {dias_restantes} dias. [Falar com Suporte]({whatsapp_link})")
     elif dias_restantes < 0 and user['role'] != 'admin':
         st.error(f"❌ Licença expirada em {venc_assinatura.strftime('%d/%m/%Y')}.")
-        st.markdown(f"### [CLIQUE AQUI PARA FALAR COM SUPORTE]( {whatsapp_link} )", unsafe_allow_html=True)
+        st.markdown(f"### [CONTATO SUPORTE VIA WHATSAPP]({whatsapp_link})", unsafe_allow_html=True)
         st.stop()
 
     with st.sidebar:
         st.title(f"👤 {user['login']}")
-        menu_options = ["Scanner", "Gerenciar Usuários"] if user['role'] == 'admin' else ["Scanner"]
-        aba = st.radio("Navegação", menu_options)
+        menu = ["Scanner", "Gerenciar Usuários"] if user['role'] == 'admin' else ["Scanner"]
+        aba = st.radio("Navegação", menu)
         if st.button("Sair"):
             st.session_state.user_data = None
             st.rerun()
@@ -73,9 +73,9 @@ if verificar_login():
             else:
                 nova_val = (datetime.now() + timedelta(days=365)).isoformat()
                 supabase.table("registros_garantia").insert({"codigo": codigo, "validade": nova_val, "owner_id": user['id']}).execute()
-                st.info(f"💾 CADASTRADO: {codigo}")
+                st.info(f"💾 CADASTRADO: {codigo} (1 ano de garantia)")
 
-    # --- ABA: ADMIN (GESTÃO DE CLIENTES) ---
+    # --- ABA: ADMIN ---
     elif aba == "Gerenciar Usuários" and user['role'] == 'admin':
         st.title("👥 Gestão de Clientes")
         tab1, tab2, tab3 = st.tabs(["Listar/Excluir", "Novo Usuário", "Renovar / Editar"])
@@ -88,36 +88,51 @@ if verificar_login():
                 lista_logins = [None] + [u['login'] for u in res_u.data]
                 u_del = st.selectbox("Selecione um cliente para EXCLUIR", lista_logins)
                 if u_del:
-                    st.warning(f"Isso apagará {u_del} e todos os seus dados.")
+                    st.warning(f"Atenção: A exclusão de {u_del} é permanente.")
                     if st.button(f"🗑️ Confirmar Exclusão"):
                         supabase.table("usuarios_sistema").delete().eq("login", u_del).execute()
-                        st.success("Excluído com sucesso!")
+                        st.success("Excluído!")
                         st.rerun()
 
         with tab2:
+            st.subheader("Cadastrar Novo Cliente")
             with st.form("novo_user_form"):
-                nl = st.text_input("Login")
-                ne = st.text_input("Email")
-                ns = st.text_input("Senha")
-                nv = st.date_input("Vencimento", value=hoje + timedelta(days=30))
-                if st.form_submit_button("Cadastrar Cliente"):
-                    supabase.table("usuarios_sistema").insert({"login": nl, "email": ne, "senha": ns, "vencimento_assinatura": nv.isoformat(), "role": "cliente"}).execute()
-                    st.success("Cadastrado!")
+                nl = st.text_input("Login *")
+                ne = st.text_input("Email *")
+                ns = st.text_input("Senha *")
+                nv = st.date_input("Vencimento *", value=hoje + timedelta(days=30))
+                
+                if st.form_submit_button("Salvar Cadastro"):
+                    # VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS
+                    if not nl or not ne or not ns:
+                        st.error("⚠️ Por favor, preencha todos os campos marcados com *")
+                    else:
+                        supabase.table("usuarios_sistema").insert({
+                            "login": nl, "email": ne, "senha": ns, 
+                            "vencimento_assinatura": nv.isoformat(), "role": "cliente"
+                        }).execute()
+                        st.success(f"Cliente {nl} cadastrado com sucesso!")
 
         with tab3:
+            st.subheader("Editar Dados e Renovação")
             res_e = supabase.table("usuarios_sistema").select("login, email, vencimento_assinatura").eq("role", "cliente").execute()
             if res_e.data:
                 dict_users = {u['login']: u for u in res_e.data}
-                u_edit = st.selectbox("Selecione para Alterar", list(dict_users.keys()))
+                u_edit = st.selectbox("Selecione o Cliente", list(dict_users.keys()))
                 user_atual = dict_users[u_edit]
                 
                 with st.form("edit_form"):
-                    new_e = st.text_input("Novo Email", value=user_atual['email'])
-                    new_s = st.text_input("Nova Senha (vazio para manter)")
-                    new_v = st.date_input("Nova Data de Vencimento", value=datetime.strptime(user_atual['vencimento_assinatura'], '%Y-%m-%d').date())
+                    new_e = st.text_input("E-mail *", value=user_atual['email'])
+                    new_s = st.text_input("Nova Senha (deixe vazio para manter)")
+                    new_v = st.date_input("Data de Vencimento *", value=datetime.strptime(user_atual['vencimento_assinatura'], '%Y-%m-%d').date())
+                    
                     if st.form_submit_button("Salvar Alterações"):
-                        upd = {"email": new_e, "vencimento_assinatura": new_v.isoformat()}
-                        if new_s: upd["senha"] = new_s
-                        supabase.table("usuarios_sistema").update(upd).eq("login", u_edit).execute()
-                        st.success("Atualizado!")
-                        st.rerun()
+                        # VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS NA EDIÇÃO
+                        if not new_e:
+                            st.error("⚠️ O campo E-mail é obrigatório.")
+                        else:
+                            upd = {"email": new_e, "vencimento_assinatura": new_v.isoformat()}
+                            if new_s: upd["senha"] = new_s
+                            supabase.table("usuarios_sistema").update(upd).eq("login", u_edit).execute()
+                            st.success("Dados atualizados!")
+                            st.rerun()
