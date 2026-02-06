@@ -2,20 +2,22 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 from supabase import create_client, Client
+import io
 
 # --- CONFIGURAÇÕES SUPABASE ---
 URL = "https://mawujlwwhthckkepcbaj.supabase.co"
-# ATENÇÃO: Use a 'service_role key' para poder gerenciar usuários livremente
+# Certifique-se de usar sua service_role ou anon key correta aqui
 KEY = "SUA_SECRET_KEY_AQUI" 
 supabase: Client = create_client(URL, KEY)
 
 st.set_page_config(page_title="Jarvis Cloud - Admin", layout="centered")
 
-# --- ESTILIZAÇÃO ---
+# --- ESTILIZAÇÃO CSS ---
 st.markdown("""
     <style>
     .stImage > img { display: block; margin-left: auto; margin-right: auto; }
     .main-title { text-align: center; }
+    .stTextInput > div > div > input { text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -36,42 +38,37 @@ def verificar_login():
                     user = res.data[0]
                     venc = datetime.strptime(user['vencimento_assinatura'], '%Y-%m-%d').date()
                     if datetime.now().date() > venc and user['role'] != 'admin':
-                        st.error("❌ Assinatura expirada.")
+                        st.error("❌ Assinatura expirada. Contate o administrador.")
                     else:
                         st.session_state.user_data = user
                         st.rerun()
                 else:
                     st.error("Usuário ou senha inválidos.")
-            except Exception as e:
-                st.error(f"Erro de conexão: Verifique se as tabelas foram criadas no SQL Editor.")
+            except Exception:
+                st.error("Erro de conexão. Verifique o SQL Editor no Supabase.")
         return False
     return True
 
 if verificar_login():
     user_role = st.session_state.user_data['role']
     
-    # Menu Lateral
     with st.sidebar:
         st.title("🛡️ Jarvis Control")
-        if user_role == "admin":
-            aba = st.radio("Navegação", ["Scanner", "Gerenciar Clientes"])
-        else:
-            aba = "Scanner"
-            
-        uploaded_logo = st.file_uploader("Logo da Empresa", type=["png", "jpg"])
+        aba = st.radio("Navegação", ["Scanner", "Gerenciar Clientes"]) if user_role == "admin" else "Scanner"
+        uploaded_logo = st.file_uploader("Upload da Logo", type=["png", "jpg"])
         if st.button("Sair"):
             st.session_state.user_data = None
             st.rerun()
 
-    # --- ABA: SCANNER (USO DIÁRIO) ---
+    # --- ABA: SCANNER ---
     if aba == "Scanner":
-        if uploaded_logo: st.image(uploaded_logo, width=200)
+        if uploaded_logo: st.image(uploaded_logo, width=220)
         st.markdown("<h2 class='main-title'>Checkpoint de Garantia</h2>", unsafe_allow_html=True)
-        
-        prazo_meses = st.number_input("Meses de Garantia", value=12)
+        prazo_meses = st.number_input("Meses de Garantia (Padrão)", value=12)
 
         with st.form("scan_form", clear_on_submit=True):
-            input_scanner = st.text_input("AGUARDANDO BIP...", key="scanner_input")
+            st.info("Foque aqui e escaneie o produto")
+            input_scanner = st.text_input("SCANNER ATIVO", key="scanner_input", label_visibility="collapsed")
             st.form_submit_button("PROCESSAR", use_container_width=True)
 
         if input_scanner:
@@ -90,31 +87,41 @@ if verificar_login():
                 supabase.table("registros_garantia").insert({"codigo": codigo, "validade": nova_val.isoformat()}).execute()
                 st.info(f"💾 CADASTRADO: {codigo} | Válido até {nova_val.strftime('%d/%m/%Y')}")
 
-    # --- ABA: ADMINISTRADOR (GESTÃO DE CLIENTES) ---
+    # --- ABA: ADMINISTRADOR ---
     elif aba == "Gerenciar Clientes":
-        st.title("👥 Gestão de Clientes")
+        st.title("👥 Painel Administrativo")
         
+        # 1. Exportação Excel
+        st.subheader("📊 Relatórios")
+        if st.button("Gerar Relatório de Garantias (Excel)"):
+            try:
+                todos = supabase.table("registros_garantia").select("*").execute()
+                if todos.data:
+                    df_excel = pd.DataFrame(todos.data)
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        df_excel.to_excel(writer, index=False, sheet_name='Garantias')
+                    st.download_button(
+                        label="📥 Baixar Arquivo Excel",
+                        data=output.getvalue(),
+                        file_name=f"relatorio_garantias_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+            except Exception as e:
+                st.error("Erro ao gerar relatório.")
+
+        # 2. Gestão de Usuários
+        st.divider()
         with st.expander("➕ Cadastrar Novo Cliente"):
             with st.form("novo_user"):
-                n_user = st.text_input("Login do Cliente")
-                n_pass = st.text_input("Senha do Cliente")
-                n_venc = st.date_input("Vencimento da Assinatura", value=datetime.now() + timedelta(days=30))
-                if st.form_submit_button("Cadastrar Cliente"):
-                    try:
-                        supabase.table("usuarios_sistema").insert({"login": n_user, "senha": n_pass, "vencimento_assinatura": n_venc.isoformat(), "role": "cliente"}).execute()
-                        st.success("Cliente cadastrado!")
-                    except: st.error("Erro: Login já existe.")
+                n_user = st.text_input("Login")
+                n_pass = st.text_input("Senha")
+                n_venc = st.date_input("Vencimento Assinatura", value=datetime.now() + timedelta(days=30))
+                if st.form_submit_button("Salvar Cliente"):
+                    supabase.table("usuarios_sistema").insert({"login": n_user, "senha": n_pass, "vencimento_assinatura": n_venc.isoformat()}).execute()
+                    st.success("Cliente criado!")
 
-        st.subheader("Lista de Clientes e Renovações")
+        st.subheader("Clientes Ativos")
         users = supabase.table("usuarios_sistema").select("*").eq("role", "cliente").execute()
         if users.data:
-            df_users = pd.DataFrame(users.data)
-            st.dataframe(df_users[['login', 'vencimento_assinatura', 'ativo']], use_container_width=True)
-            
-            # Renovação Rápida
-            st.divider()
-            target_user = st.selectbox("Selecionar Cliente para Renovar", [u['login'] for u in users.data])
-            nova_data = st.date_input("Nova Data de Vencimento")
-            if st.button(f"Atualizar Assinatura de {target_user}"):
-                supabase.table("usuarios_sistema").update({"vencimento_assinatura": nova_data.isoformat()}).eq("login", target_user).execute()
-                st.success("Data atualizada!")
+            st.table(pd.DataFrame(users.data)[['login', 'vencimento_assinatura']])
