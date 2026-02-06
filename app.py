@@ -76,17 +76,19 @@ if verificar_login():
 
     with st.sidebar:
         st.title(f"👤 {user['login']}")
-        aba = st.radio("Menu", ["Scanner", "Gerenciar Usuários"]) if user['role'] == 'admin' else "Scanner"
+        # Menu adaptativo: Cliente vê Scanner e Perfil. Admin vê tudo.
+        opcoes = ["Scanner", "Meu Perfil", "Gerenciar Usuários"] if user['role'] == 'admin' else ["Scanner", "Meu Perfil"]
+        aba = st.radio("Menu", opcoes)
         if st.button("Sair"):
             if cookie_manager.get('jarvis_user'): cookie_manager.delete('jarvis_user')
             st.session_state.user_data = None
             st.rerun()
 
-    # --- ABA: SCANNER (VISÍVEL PARA TODOS) ---
+    # --- ABA: SCANNER ---
     if aba == "Scanner":
         st.markdown("<h2 style='text-align: center;'>🛡️ Checkpoint</h2>", unsafe_allow_html=True)
         with st.form("scan", clear_on_submit=True):
-            input_scan = st.text_input("ESCANEIE AQUI", key="scanner_input")
+            input_scan = st.text_input("ESCANEIE AQUI")
             st.form_submit_button("PROCESSAR", use_container_width=True)
         
         if input_scan:
@@ -101,6 +103,20 @@ if verificar_login():
                 supabase.table("registros_garantia").insert({"codigo": codigo, "validade": v_p, "owner_id": user['id']}).execute()
                 st.success("💾 Cadastrado com sucesso!")
 
+    # --- ABA: MEU PERFIL (ALTERAÇÃO DE DADOS PELO CLIENTE) ---
+    elif aba == "Meu Perfil":
+        st.title("📝 Meus Dados")
+        with st.form("perfil_form"):
+            novo_email = st.text_input("Alterar E-mail *", value=user['email'])
+            nova_senha = st.text_input("Alterar Senha (deixe vazio para manter)", type="password")
+            if st.form_submit_button("Salvar Alterações"):
+                if novo_email:
+                    upd = {"email": novo_email}
+                    if nova_senha: upd["senha"] = nova_senha
+                    supabase.table("usuarios_sistema").update(upd).eq("id", user['id']).execute()
+                    st.success("Dados atualizados com sucesso! Na próxima sessão os dados serão refletidos.")
+                else: st.error("O e-mail é obrigatório.")
+
     # --- ABA: ADMIN ---
     elif aba == "Gerenciar Usuários" and user['role'] == 'admin':
         st.title("👥 Gestão")
@@ -110,7 +126,7 @@ if verificar_login():
             if res_u.data:
                 st.dataframe(pd.DataFrame(res_u.data)[['login', 'email', 'vencimento_assinatura']], use_container_width=True)
                 u_del = st.selectbox("Excluir cliente:", [None] + [u['login'] for u in res_u.data])
-                if u_del and st.button(f"🗑️ Deletar {u_del}"):
+                if u_del and st.button(f"Confirmar Exclusão"):
                     supabase.table("usuarios_sistema").delete().eq("login", u_del).execute()
                     st.success("Excluído!"); st.rerun()
         with t2:
