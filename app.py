@@ -20,11 +20,13 @@ def verificar_login():
             u = st.text_input("Usuário ou Email")
             s = st.text_input("Senha", type="password")
             if st.form_submit_button("Entrar", use_container_width=True):
-                res = supabase.table("usuarios_sistema").select("*").or_(f"login.eq.{u},email.eq.{u}").eq("senha", s).execute()
-                if res.data:
-                    st.session_state.user_data = res.data[0]
-                    st.rerun()
-                else: st.error("Incorreto.")
+                try:
+                    res = supabase.table("usuarios_sistema").select("*").or_(f"login.eq.{u},email.eq.{u}").eq("senha", s).execute()
+                    if res.data:
+                        st.session_state.user_data = res.data[0]
+                        st.rerun()
+                    else: st.error("Incorreto.")
+                except: st.error("Erro de conexão com Supabase.")
         return False
     return True
 
@@ -46,12 +48,13 @@ if verificar_login():
 
     with st.sidebar:
         st.title(f"👤 {user['login']}")
-        aba = st.radio("Navegação", ["Scanner", "Gerenciar Usuários"]) if user['role'] == 'admin' else ["Scanner"]
+        menu_options = ["Scanner", "Gerenciar Usuários"] if user['role'] == 'admin' else ["Scanner"]
+        aba = st.radio("Navegação", menu_options)
         if st.button("Sair"):
             st.session_state.user_data = None
             st.rerun()
 
-    # --- ABA: SCANNER (DADOS SEPARADOS POR DONO) ---
+    # --- ABA: SCANNER ---
     if aba == "Scanner":
         st.markdown("<h2 style='text-align: center;'>🛡️ Checkpoint</h2>", unsafe_allow_html=True)
         with st.form("scan_form", clear_on_submit=True):
@@ -60,7 +63,6 @@ if verificar_login():
 
         if input_scan:
             codigo = input_scan.strip()
-            # Busca apenas nos bips que pertencem a este usuário (owner_id)
             res = supabase.table("registros_garantia").select("*").eq("codigo", codigo).eq("owner_id", user['id']).execute()
             
             if res.data:
@@ -71,10 +73,10 @@ if verificar_login():
             else:
                 nova_val = (datetime.now() + timedelta(days=365)).isoformat()
                 supabase.table("registros_garantia").insert({"codigo": codigo, "validade": nova_val, "owner_id": user['id']}).execute()
-                st.info(f"💾 CADASTRADO: {codigo} (Dono: {user['login']})")
+                st.info(f"💾 CADASTRADO: {codigo}")
 
-    # --- ABA: ADMIN ---
-    elif aba == "Gerenciar Usuários":
+    # --- ABA: ADMIN (GESTÃO DE CLIENTES) ---
+    elif aba == "Gerenciar Usuários" and user['role'] == 'admin':
         st.title("👥 Gestão de Clientes")
         tab1, tab2, tab3 = st.tabs(["Listar/Excluir", "Novo Usuário", "Renovar / Editar"])
 
@@ -83,15 +85,39 @@ if verificar_login():
             if res_u.data:
                 st.dataframe(pd.DataFrame(res_u.data), use_container_width=True)
                 st.divider()
-                # TRAVA DE SEGURANÇA: Selectbox começa vazia (None)
                 lista_logins = [None] + [u['login'] for u in res_u.data]
-                u_del = st.selectbox("Selecione um cliente para habilitar a exclusão", lista_logins)
-                
+                u_del = st.selectbox("Selecione um cliente para EXCLUIR", lista_logins)
                 if u_del:
-                    st.warning(f"Atenção: Deletar {u_del} apagará TODOS os bips deste cliente permanentemente.")
-                    if st.button(f"🗑️ Confirmar Exclusão Definitiva"):
+                    st.warning(f"Isso apagará {u_del} e todos os seus dados.")
+                    if st.button(f"🗑️ Confirmar Exclusão"):
                         supabase.table("usuarios_sistema").delete().eq("login", u_del).execute()
-                        st.success(f"Usuário e dados de {u_del} excluídos.")
+                        st.success("Excluído com sucesso!")
                         st.rerun()
 
-        # (Mantendo abas de cadastro e edição conforme as versões anteriores...)
+        with tab2:
+            with st.form("novo_user_form"):
+                nl = st.text_input("Login")
+                ne = st.text_input("Email")
+                ns = st.text_input("Senha")
+                nv = st.date_input("Vencimento", value=hoje + timedelta(days=30))
+                if st.form_submit_button("Cadastrar Cliente"):
+                    supabase.table("usuarios_sistema").insert({"login": nl, "email": ne, "senha": ns, "vencimento_assinatura": nv.isoformat(), "role": "cliente"}).execute()
+                    st.success("Cadastrado!")
+
+        with tab3:
+            res_e = supabase.table("usuarios_sistema").select("login, email, vencimento_assinatura").eq("role", "cliente").execute()
+            if res_e.data:
+                dict_users = {u['login']: u for u in res_e.data}
+                u_edit = st.selectbox("Selecione para Alterar", list(dict_users.keys()))
+                user_atual = dict_users[u_edit]
+                
+                with st.form("edit_form"):
+                    new_e = st.text_input("Novo Email", value=user_atual['email'])
+                    new_s = st.text_input("Nova Senha (vazio para manter)")
+                    new_v = st.date_input("Nova Data de Vencimento", value=datetime.strptime(user_atual['vencimento_assinatura'], '%Y-%m-%d').date())
+                    if st.form_submit_button("Salvar Alterações"):
+                        upd = {"email": new_e, "vencimento_assinatura": new_v.isoformat()}
+                        if new_s: upd["senha"] = new_s
+                        supabase.table("usuarios_sistema").update(upd).eq("login", u_edit).execute()
+                        st.success("Atualizado!")
+                        st.rerun()
