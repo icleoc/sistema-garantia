@@ -2,126 +2,70 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 from supabase import create_client, Client
-import io
 
-# --- CONFIGURAÇÕES SUPABASE ---
+# --- CONEXÃO ---
 URL = "https://mawujlwwhthckkepcbaj.supabase.co"
-# Certifique-se de usar sua service_role ou anon key correta aqui
-KEY = "SUA_SECRET_KEY_AQUI" 
-supabase: Client = create_client(URL, KEY)
+KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1hd3VqbHd3aHRoY2trZXBjYmFqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDQxNDg1NiwiZXhwIjoyMDg1OTkwODU2fQ.gRDWM7dD2MP5SbqqKbRThTpO3YhjK359RW1HfdMxGao" # <--- USE A SERVICE_ROLE AQUI
 
-st.set_page_config(page_title="Jarvis Cloud - Admin", layout="centered")
+try:
+    supabase: Client = create_client(URL, KEY)
+except:
+    st.error("Falha ao inicializar cliente Supabase.")
 
-# --- ESTILIZAÇÃO CSS ---
-st.markdown("""
-    <style>
-    .stImage > img { display: block; margin-left: auto; margin-right: auto; }
-    .main-title { text-align: center; }
-    .stTextInput > div > div > input { text-align: center; }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="Jarvis Cloud", layout="centered")
 
-# --- SISTEMA DE LOGIN ---
+# --- LOGIN ---
 def verificar_login():
     if 'user_data' not in st.session_state:
         st.session_state.user_data = None
 
     if st.session_state.user_data is None:
-        st.markdown("<h1 class='main-title'>🔒 Acesso ao Sistema</h1>", unsafe_allow_html=True)
-        usuario = st.text_input("Usuário")
-        senha = st.text_input("Senha", type="password")
+        st.markdown("<h2 style='text-align: center;'>🔒 Acesso ao Sistema</h2>", unsafe_allow_html=True)
+        u = st.text_input("Usuário")
+        s = st.text_input("Senha", type="password")
         
         if st.button("Entrar", use_container_width=True):
             try:
-                res = supabase.table("usuarios_sistema").select("*").eq("login", usuario).eq("senha", senha).execute()
+                # Teste de consulta explícita
+                res = supabase.table("usuarios_sistema").select("*").eq("login", u).eq("senha", s).execute()
                 if res.data:
-                    user = res.data[0]
-                    venc = datetime.strptime(user['vencimento_assinatura'], '%Y-%m-%d').date()
-                    if datetime.now().date() > venc and user['role'] != 'admin':
-                        st.error("❌ Assinatura expirada. Contate o administrador.")
-                    else:
-                        st.session_state.user_data = user
-                        st.rerun()
+                    st.session_state.user_data = res.data[0]
+                    st.rerun()
                 else:
-                    st.error("Usuário ou senha inválidos.")
-            except Exception:
-                st.error("Erro de conexão. Verifique o SQL Editor no Supabase.")
+                    st.error("Usuário ou senha incorretos.")
+            except Exception as e:
+                st.error("Erro de API: Verifique se rodou o SQL no Supabase e se a KEY está correta.")
         return False
     return True
 
 if verificar_login():
-    user_role = st.session_state.user_data['role']
+    user = st.session_state.user_data
     
     with st.sidebar:
-        st.title("🛡️ Jarvis Control")
-        aba = st.radio("Navegação", ["Scanner", "Gerenciar Clientes"]) if user_role == "admin" else "Scanner"
-        uploaded_logo = st.file_uploader("Upload da Logo", type=["png", "jpg"])
+        st.title(f"Olá, {user['login']}")
+        aba = st.radio("Menu", ["Scanner", "Admin"]) if user['role'] == 'admin' else "Scanner"
         if st.button("Sair"):
             st.session_state.user_data = None
             st.rerun()
 
-    # --- ABA: SCANNER ---
     if aba == "Scanner":
-        if uploaded_logo: st.image(uploaded_logo, width=220)
-        st.markdown("<h2 class='main-title'>Checkpoint de Garantia</h2>", unsafe_allow_html=True)
-        prazo_meses = st.number_input("Meses de Garantia (Padrão)", value=12)
-
-        with st.form("scan_form", clear_on_submit=True):
-            st.info("Foque aqui e escaneie o produto")
-            input_scanner = st.text_input("SCANNER ATIVO", key="scanner_input", label_visibility="collapsed")
+        st.markdown("<h2 style='text-align: center;'>🛡️ Checkpoint</h2>", unsafe_allow_html=True)
+        with st.form("scan", clear_on_submit=True):
+            input_scan = st.text_input("ESCANEIE AQUI", key="s")
             st.form_submit_button("PROCESSAR", use_container_width=True)
 
-        if input_scanner:
-            codigo = input_scanner.strip()
-            res = supabase.table("registros_garantia").select("*").eq("codigo", codigo).execute()
-            
-            if res.data:
-                item = res.data[0]
-                validade = datetime.fromisoformat(item['validade'].split('+')[0]).date()
-                if datetime.now().date() <= validade:
-                    st.success(f"✅ EM GARANTIA | Expira: {validade.strftime('%d/%m/%Y')}")
-                else:
-                    st.error(f"❌ EXPIRADO | Venceu: {validade.strftime('%d/%m/%Y')}")
+        if input_scan:
+            # Lógica de Bip Único
+            check = supabase.table("registros_garantia").select("*").eq("codigo", input_scan).execute()
+            if check.data:
+                item = check.data[0]
+                st.info(f"Produto já cadastrado. Expira em: {item['validade']}")
             else:
-                nova_val = datetime.now() + timedelta(days=prazo_meses * 30)
-                supabase.table("registros_garantia").insert({"codigo": codigo, "validade": nova_val.isoformat()}).execute()
-                st.info(f"💾 CADASTRADO: {codigo} | Válido até {nova_val.strftime('%d/%m/%Y')}")
+                val = (datetime.now() + timedelta(days=365)).isoformat()
+                supabase.table("registros_garantia").insert({"codigo": input_scan, "validade": val}).execute()
+                st.success("✅ Cadastrado com 1 ano de garantia!")
 
-    # --- ABA: ADMINISTRADOR ---
-    elif aba == "Gerenciar Clientes":
-        st.title("👥 Painel Administrativo")
-        
-        # 1. Exportação Excel
-        st.subheader("📊 Relatórios")
-        if st.button("Gerar Relatório de Garantias (Excel)"):
-            try:
-                todos = supabase.table("registros_garantia").select("*").execute()
-                if todos.data:
-                    df_excel = pd.DataFrame(todos.data)
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df_excel.to_excel(writer, index=False, sheet_name='Garantias')
-                    st.download_button(
-                        label="📥 Baixar Arquivo Excel",
-                        data=output.getvalue(),
-                        file_name=f"relatorio_garantias_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            except Exception as e:
-                st.error("Erro ao gerar relatório.")
-
-        # 2. Gestão de Usuários
-        st.divider()
-        with st.expander("➕ Cadastrar Novo Cliente"):
-            with st.form("novo_user"):
-                n_user = st.text_input("Login")
-                n_pass = st.text_input("Senha")
-                n_venc = st.date_input("Vencimento Assinatura", value=datetime.now() + timedelta(days=30))
-                if st.form_submit_button("Salvar Cliente"):
-                    supabase.table("usuarios_sistema").insert({"login": n_user, "senha": n_pass, "vencimento_assinatura": n_venc.isoformat()}).execute()
-                    st.success("Cliente criado!")
-
-        st.subheader("Clientes Ativos")
-        users = supabase.table("usuarios_sistema").select("*").eq("role", "cliente").execute()
-        if users.data:
-            st.table(pd.DataFrame(users.data)[['login', 'vencimento_assinatura']])
+    elif aba == "Admin":
+        st.title("👥 Gestão de Usuários")
+        users = supabase.table("usuarios_sistema").select("login, vencimento_assinatura").execute()
+        st.table(pd.DataFrame(users.data))
