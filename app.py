@@ -15,7 +15,7 @@ supabase: Client = create_client(URL, KEY)
 # --- FUNÇÃO DE ENVIO DE EMAIL (SMTP GOOGLE) ---
 def enviar_email_boas_vindas(email_destino, usuario, senha):
     remetente = "icleoc@gmail.com" 
-    senha_app = "dkmjzfmfwqnfufrx" 
+    senha_app = "dkmjzfmfwqnfufrx" # Senha de app configurada
     
     msg = MIMEMultipart()
     msg['From'] = f"Jarvis Suporte <{remetente}>"
@@ -47,12 +47,13 @@ def enviar_email_boas_vindas(email_destino, usuario, senha):
 
 # --- INTERFACE ---
 st.set_page_config(page_title="Jarvis Pro Cloud", layout="centered")
-cookie_manager = stx.CookieManager()
+cookie_manager = stx.CookieManager() # Gerenciador fora de cache para evitar erro
 
 def verificar_login():
     if 'user_data' not in st.session_state:
         st.session_state.user_data = None
     
+    # Restaura sessão via Cookie para evitar login após refresh
     saved_user = cookie_manager.get('jarvis_user')
     if saved_user and st.session_state.user_data is None:
         try:
@@ -64,6 +65,7 @@ def verificar_login():
 
     if st.session_state.user_data is None:
         st.markdown("<h2 style='text-align: center;'>🔒 Acesso ao Sistema</h2>", unsafe_allow_html=True)
+        # st.form permite o uso da tecla ENTER para login
         with st.form("login_form"):
             u = st.text_input("Usuário ou Email")
             s = st.text_input("Senha", type="password")
@@ -84,7 +86,7 @@ if verificar_login():
     hoje = date.today()
     venc = datetime.strptime(user['vencimento_assinatura'], '%Y-%m-%d').date()
     
-    # --- ALERTA E BLOQUEIO ---
+    # --- ALERTA E BLOQUEIO COM WHATSAPP ---
     whatsapp_link = "https://wa.me/5562991772700?text=Preciso%20renovar%20minha%20licença"
     if 0 <= (venc - hoje).days <= 5:
         st.warning(f"⚠️ Licença vence em {(venc - hoje).days} dias. [Falar com Suporte]({whatsapp_link})")
@@ -94,15 +96,16 @@ if verificar_login():
 
     with st.sidebar:
         st.title(f"👤 {user['login']}")
+        # Clientes vêm Scanner e Perfil. Admin vê Gerenciamento
         opcoes = ["Scanner", "Meu Perfil", "Gerenciar Usuários"] if user['role'] == 'admin' else ["Scanner", "Meu Perfil"]
         aba = st.radio("Navegação", opcoes)
         if st.button("Sair"):
             if cookie_manager.get('jarvis_user'):
-                cookie_manager.delete('jarvis_user')
+                cookie_manager.delete('jarvis_user') # Evita erro de logout
             st.session_state.user_data = None
             st.rerun()
 
-    # --- ABA: SCANNER ---
+    # --- ABA: SCANNER (GARANTIA DE 3 MESES) ---
     if aba == "Scanner":
         st.markdown("<h2 style='text-align: center;'>🛡️ Checkpoint</h2>", unsafe_allow_html=True)
         with st.form("scan", clear_on_submit=True):
@@ -110,15 +113,21 @@ if verificar_login():
             st.form_submit_button("PROCESSAR", use_container_width=True)
         if input_scan:
             codigo = input_scan.strip()
+            # Filtra dados pelo dono da conta para privacidade
             res = supabase.table("registros_garantia").select("*").eq("codigo", codigo).eq("owner_id", user['id']).execute()
             if res.data:
                 item = res.data[0]
                 val_prod = datetime.fromisoformat(item['validade'].split('+')[0]).date()
-                st.info(f"ID: {codigo} | Validade: {val_prod.strftime('%d/%m/%Y')}")
+                if hoje <= val_prod:
+                    st.success(f"✅ EM GARANTIA | Validade: {val_prod.strftime('%d/%m/%Y')}")
+                else:
+                    st.error(f"❌ EXPIRADO | Venceu em: {val_prod.strftime('%d/%m/%Y')}")
             else:
-                v_p = (datetime.now() + timedelta(days=365)).isoformat()
+                # CADASTRO NOVO: Garantia de 90 dias (3 meses)
+                v_p = (datetime.now() + timedelta(days=90)).isoformat()
                 supabase.table("registros_garantia").insert({"codigo": codigo, "validade": v_p, "owner_id": user['id']}).execute()
-                st.success(f"💾 Cadastrado com sucesso!")
+                nova_data_f = (date.today() + timedelta(days=90)).strftime('%d/%m/%Y')
+                st.success(f"💾 CADASTRADO COM SUCESSO! Validade: {nova_data_f}")
 
     # --- ABA: MEU PERFIL (AUTO-EDIÇÃO) ---
     elif aba == "Meu Perfil":
@@ -131,11 +140,11 @@ if verificar_login():
                     upd = {"email": novo_email}
                     if nova_senha: upd["senha"] = nova_senha
                     supabase.table("usuarios_sistema").update(upd).eq("id", user['id']).execute()
-                    st.success("Dados atualizados! Reinicie a sessão para refletir totalmente.")
+                    st.success("Dados atualizados! Reinicie a sessão para ver as mudanças.")
                 else: st.error("O e-mail é obrigatório.")
 
     # --- ABA: ADMIN ---
-    elif aba == "Gerenciar Usuários":
+    elif aba == "Gerenciar Usuários" and user['role'] == 'admin':
         st.title("👥 Gestão de Clientes")
         t1, t2, t3 = st.tabs(["Listar/Excluir", "Novo Usuário", "Editar/Renovar"])
         
@@ -154,10 +163,10 @@ if verificar_login():
                 nv = st.date_input("Vencimento", value=hoje + timedelta(days=30))
                 if st.form_submit_button("Cadastrar e Enviar E-mail"):
                     if nl and ne and ns:
-                        supabase.table("usuarios_sistema").insert({"login": nl, "email": ne, "senha": ns, "vencimento_assinatura": nv.isoformat()}).execute()
+                        supabase.table("usuarios_sistema").insert({"login": nl, "email": ne, "senha": ns, "vencimento_assinatura": nv.isoformat(), "role": "cliente"}).execute()
                         enviar_email_boas_vindas(ne, nl, ns)
                         st.success(f"✅ {nl} cadastrado e avisado por e-mail!")
-                    else: st.error("Preencha todos os campos!")
+                    else: st.error("Preencha todos os campos obrigatórios!")
 
         with t3:
             res_e = supabase.table("usuarios_sistema").select("*").eq("role", "cliente").execute()
@@ -175,3 +184,4 @@ if verificar_login():
                             if es: upd["senha"] = es
                             supabase.table("usuarios_sistema").update(upd).eq("login", sel).execute()
                             st.success("Dados atualizados!"); st.rerun()
+                        else: st.error("E-mail é obrigatório.")
