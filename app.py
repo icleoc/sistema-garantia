@@ -70,7 +70,6 @@ if verificar_login():
             if cookie_manager.get('jarvis_user'): cookie_manager.delete('jarvis_user')
             st.session_state.user_data = None; st.rerun()
 
-    # --- ABA: SCANNER ---
     if aba == "Scanner":
         st.markdown("<h2 style='text-align: center;'>🛡️ Checkpoint</h2>", unsafe_allow_html=True)
         
@@ -92,30 +91,41 @@ if verificar_login():
                 elif input_scan:
                     codigo = input_scan.strip()
                     
-                    # 1. Verifica no banco se o produto já existe para este dono (Garantia Retroativa)
-                    res = supabase.table("registros_garantia").select("*").eq("codigo", codigo).eq("owner_id", user['id']).order("validade", desc=True).limit(1).execute()
+                    # LÓGICA DE MEMÓRIA: Verifica se já bipou este código NESTA SESSÃO/PEDIDO
+                    ja_bipado_agora = next((item for item in st.session_state.bips_sessao if item["Código"] == codigo), None)
                     
-                    if res.data:
-                        item = res.data[0]
-                        val_p = datetime.fromisoformat(item['validade'].split('+')[0]).date()
-                        msg = "✅ EM GARANTIA" if hoje <= val_p else "❌ EXPIRADO"
-                        msg += f" (Venc: {val_p.strftime('%d/%m/%Y')})"
+                    if ja_bipado_agora:
+                        # Se já está na lista, apenas adicionamos um registro igual para o groupby somar
+                        st.session_state.bips_sessao.append({
+                            "Pedido": num_pedido, 
+                            "Código": codigo, 
+                            "Status": ja_bipado_agora["Status"] 
+                        })
                     else:
-                        # 2. Cadastro novo de 90 dias se for inédito
-                        v_p = (datetime.now() + timedelta(days=90)).isoformat()
-                        supabase.table("registros_garantia").insert({"codigo": codigo, "validade": v_p, "owner_id": user['id'], "numero_pedido": num_pedido}).execute()
-                        msg = "🆕 NOVO CADASTRO (90 dias)"
-                    
-                    st.session_state.bips_sessao.append({"Pedido": num_pedido, "Código": codigo, "Status": msg})
+                        # Se é o primeiro bipe do código neste pedido, consulta o banco
+                        res = supabase.table("registros_garantia").select("*").eq("codigo", codigo).eq("owner_id", user['id']).order("validade", desc=True).limit(1).execute()
+                        
+                        if res.data:
+                            item = res.data[0]
+                            val_p = datetime.fromisoformat(item['validade'].split('+')[0]).date()
+                            status = "✅ EM GARANTIA" if hoje <= val_p else "❌ EXPIRADO"
+                            msg = f"{status} (Venc: {val_p.strftime('%d/%m/%Y')})"
+                        else:
+                            v_p = (datetime.now() + timedelta(days=90)).isoformat()
+                            supabase.table("registros_garantia").insert({"codigo": codigo, "validade": v_p, "owner_id": user['id'], "numero_pedido": num_pedido}).execute()
+                            msg = "🆕 NOVO CADASTRO (90 dias)"
+                        
+                        st.session_state.bips_sessao.append({"Pedido": num_pedido, "Código": codigo, "Status": msg})
 
         if st.session_state.bips_sessao:
             st.divider()
             df = pd.DataFrame(st.session_state.bips_sessao)
+            # Agrupa para que a tabela mostre apenas uma linha por código com a quantidade total
             df_view = df.groupby(['Pedido', 'Código', 'Status']).size().reset_index(name='Qtd')
-            st.subheader(f"📊 Resumo (Total: {len(st.session_state.bips_sessao)})")
+            st.subheader(f"📊 Resumo Atual (Total: {len(st.session_state.bips_sessao)})")
             st.table(df_view)
 
-    # --- ABA: MEU PERFIL ---
+    # --- RESTANTE DAS ABAS (MEU PERFIL / ADMIN) ---
     elif aba == "Meu Perfil":
         st.title("📝 Meus Dados")
         with st.form("perfil"):
@@ -127,7 +137,6 @@ if verificar_login():
                 supabase.table("usuarios_sistema").update(upd).eq("id", user['id']).execute()
                 st.success("Dados salvos!")
 
-    # --- ABA: ADMIN ---
     elif aba == "Gerenciar Usuários" and user['role'] == 'admin':
         st.title("👥 Gestão de Clientes")
         t1, t2 = st.tabs(["Listar", "Novo Usuário"])
