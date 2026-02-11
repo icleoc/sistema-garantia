@@ -90,42 +90,52 @@ if verificar_login():
                     st.error("⚠️ Informe o Pedido!")
                 elif input_scan:
                     codigo = input_scan.strip()
+                    hora_atual = datetime.now().strftime("%H:%M:%S")
                     
-                    # LÓGICA DE MEMÓRIA: Verifica se já bipou este código NESTA SESSÃO/PEDIDO
-                    ja_bipado_agora = next((item for item in st.session_state.bips_sessao if item["Código"] == codigo), None)
+                    # Verifica se o código já foi bipado NESTA SESSÃO para manter o status de Saída
+                    ja_na_lista = next((item for item in st.session_state.bips_sessao if item["Código"] == codigo), None)
                     
-                    if ja_bipado_agora:
-                        # Se já está na lista, apenas adicionamos um registro igual para o groupby somar
-                        st.session_state.bips_sessao.append({
-                            "Pedido": num_pedido, 
-                            "Código": codigo, 
-                            "Status": ja_bipado_agora["Status"] 
-                        })
+                    if ja_na_lista:
+                        msg = "📦 SAÍDA DE PRODUTO"
                     else:
-                        # Se é o primeiro bipe do código neste pedido, consulta o banco
+                        # Consulta banco apenas se for a primeira vez que aparece na tela
                         res = supabase.table("registros_garantia").select("*").eq("codigo", codigo).eq("owner_id", user['id']).order("validade", desc=True).limit(1).execute()
                         
                         if res.data:
                             item = res.data[0]
                             val_p = datetime.fromisoformat(item['validade'].split('+')[0]).date()
-                            status = "✅ EM GARANTIA" if hoje <= val_p else "❌ EXPIRADO"
-                            msg = f"{status} (Venc: {val_p.strftime('%d/%m/%Y')})"
+                            status_db = "✅ GARANTIA VÁLIDA" if hoje <= val_p else "❌ GARANTIA VENCIDA"
+                            msg = f"{status_db} (Venc: {val_p.strftime('%d/%m/%Y')})"
                         else:
                             v_p = (datetime.now() + timedelta(days=90)).isoformat()
                             supabase.table("registros_garantia").insert({"codigo": codigo, "validade": v_p, "owner_id": user['id'], "numero_pedido": num_pedido}).execute()
-                            msg = "🆕 NOVO CADASTRO (90 dias)"
-                        
-                        st.session_state.bips_sessao.append({"Pedido": num_pedido, "Código": codigo, "Status": msg})
+                            msg = "📦 SAÍDA DE PRODUTO (Garantia 90 dias)"
+                    
+                    # Adiciona individualmente à lista (sem agrupar)
+                    st.session_state.bips_sessao.insert(0, {
+                        "Hora": hora_atual,
+                        "Pedido": num_pedido, 
+                        "Código": codigo, 
+                        "Status": msg
+                    })
 
         if st.session_state.bips_sessao:
             st.divider()
             df = pd.DataFrame(st.session_state.bips_sessao)
-            # Agrupa para que a tabela mostre apenas uma linha por código com a quantidade total
-            df_view = df.groupby(['Pedido', 'Código', 'Status']).size().reset_index(name='Qtd')
-            st.subheader(f"📊 Resumo Atual (Total: {len(st.session_state.bips_sessao)})")
-            st.table(df_view)
+            
+            # Mostra a lista completa de bipes
+            st.subheader(f"📋 Listagem de Itens")
+            st.table(df)
+            
+            # Soma total no final da listagem
+            total_itens = len(st.session_state.bips_sessao)
+            st.markdown(f"""
+                <div style='text-align: right; font-size: 20px; font-weight: bold; padding: 10px; background-color: #f0f2f6; border-radius: 5px;'>
+                    TOTAL DE ITENS NO PEDIDO: {total_itens}
+                </div>
+            """, unsafe_allow_html=True)
 
-    # --- RESTANTE DAS ABAS (MEU PERFIL / ADMIN) ---
+    # --- RESTANTE DAS ABAS ---
     elif aba == "Meu Perfil":
         st.title("📝 Meus Dados")
         with st.form("perfil"):
